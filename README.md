@@ -197,11 +197,10 @@ Class: `CUDAGNNFacade`
 
 ## Overview & Notes
 
-- **No icons/branding**—100% code and docs.
 - Both "bare" and "facade" APIs are fully hackable; you can extract, modify, and visualize every tensor, graph, or parameter.
 - The `facaded_gnn.cu` facade allows for rapid graph experimentation or as a learning/teaching reference model.
 - For input/output, use the code's detailed type definitions and comments.
-- No external deep learning libraries are ever required.
+- No external deep learning libraries are required.
 
 ---
 
