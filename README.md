@@ -2,210 +2,261 @@
 
 **Author:** Matthew Abbott (2025)
 
-A transparent, extensible CUDA implementation of Graph Neural Networks (GNNs) for research and educational use. This repository contains:
+A transparent, research-first Graph Neural Network (GNN) toolkit featuring both CUDA and OpenCL codepaths. Designed for maximum visibility, extensibility, and learning: inspect every activation, weight, embedding, and training step!
 
-- **gnn.cu:** A direct, research-grade CUDA GNN with message passing layers, output/readout, and full GPU training.
-- **facaded_gnn.cu:** A modern C++17/CUDA GNN facade for user-friendly scripting, rapid prototyping, and detailed graph/network diagnostics.
+This repository provides all major GNN features in **two user modes**:
+- **Direct CUDA/OpenCL Model:** Programmable/raw GNN for command-line or scripting (`gnn.cu`, `gnn_opencl.cpp`)
+- **Facade/Introspectable GNN:** Research/teaching CLI and C++17 class, with node/edge/gradient inspection and graph utilities (`facaded_gnn.cu`, `facaded_gnn_opencl.cpp`)
 
-Both modules put a premium on direct access, step-by-step visibility, and hackability for advanced users and educators.
+No deep learning framework required. All logic, math, and graph ops are implemented from scratch.
 
 ---
 
 ## Table of Contents
 
 - [Features](#features)
+- [Module Types](#module-types)
 - [Requirements](#requirements)
-- [gnn.cu](#gnncu)
-  - [Design](#design)
-  - [Usage](#usage)
-  - [Arguments](#arguments)
-  - [Public Methods](#public-methods)
-- [facaded_gnn.cu (GNN Facade)](#facaded_gnncu-gnn-facade)
-  - [Design](#design-1)
-  - [Usage](#usage-1)
-  - [Arguments](#arguments-1)
-  - [Public Methods](#public-methods-1)
-- [Data Structures](#data-structures)
-- [Overview & Notes](#overview--notes)
+- [Quickstart: Compiling & Running](#quickstart-compiling--running)
+- [CLI Usage and Help](#cli-usage-and-help)
+  - [1. CUDA GNN (gnn.cu)](#1-cuda-gnn-gnncu)
+  - [2. OpenCL GNN (gnn_opencl.cpp)](#2-opencl-gnn-gnn_openclcpp)
+  - [3. CUDA Facade (facaded_gnn.cu)](#3-cuda-facade-facaded_gnncu)
+  - [4. OpenCL Facade (facaded_gnn_opencl.cpp)](#4-opencl-facade-facaded_gnn_openclcpp)
+- [Architecture Notes](#architecture-notes)
+- [Data Structures & Internals](#data-structures--internals)
+- [License](#license)
 
 ---
 
 ## Features
 
-- **Message Passing Graph Neural Network** supporting node-level, graph-level, and edge-level tasks.
-- Multiple activation & loss functions (ReLU, LeakyReLU, Tanh, Sigmoid; MSE, BCE).
-- Full forward and backward CUDA training; all major layers and graph operations GPU-accelerated.
-- Configurable message-passing layers, hidden and output sizes.
-- Research-focused utility and graph diagnostics: deduplication, undirected conversion, self-loops.
-- Detailed gradient clipping and numerical stability equations.
-- Model and graph serialization for checkpointing and experiments.
-- Facade GNN exposes node/edge features, neighbor/topology functions, embeddings, and architecture summary.
+- CUDA *and* OpenCL support (select at compile-time)
+- **Transparent message-passing GNN** — all weights, messages, and gradients are visible
+- **Direct and facade paradigms:** Raw programmable GNN and high-level, CLI driven introspection
+- **Multiple activation/loss functions:** ReLU, LeakyReLU, Tanh, Sigmoid | MSE, Binary Cross-Entropy
+- **Fully GPU-accelerated forward and backward**
+- Model save/load, checkpointing, and graph state serialization
+- CLI and class exposes: node/edge inspection, degree, PageRank, neighbors, embedding, gradient flow, and more
+- Built-in graph preprocessing: undirected conversion, self-loops, edge deduplication
+- No PyTorch/TensorFlow required — pure C++/CUDA/OpenCL
+
+---
+
+## Module Types
+
+There are **2 × 2 = 4 alternatives**:
+
+| Type      | Direct/CMD line      | Facade/Introspectable          |
+|-----------|----------------------|--------------------------------|
+| CUDA      | `gnn.cu`             | `facaded_gnn.cu`               |
+| OpenCL    | `gnn_opencl.cpp`     | `facaded_gnn_opencl.cpp`       |
+
+**Direct** = programmable GNN, compile/run program, manual scripting  
+**Facade** = research/CLI, Python-style command chains, model/graph internals visible
 
 ---
 
 ## Requirements
 
-- NVIDIA GPU with CUDA support (compute 6.0+ recommended, but 5.0+ works)
-- CUDA toolkit (nvcc, tested up through CUDA 12)
-- C++14 or later (C++17 for facade)
-- No external deep learning framework required
+- **CUDA:** NVIDIA GPU (Compute 6.0+ recommended), CUDA toolkit, C++14+ (`gnn.cu`, `facaded_gnn.cu`)
+- **OpenCL:** Any OpenCL 1.2+ device, C++11+ (`gnn_opencl.cpp`, `facaded_gnn_opencl.cpp`)
+- **Standard build tools:** nvcc/g++, no deep learning framework needed
 
 ---
 
-## gnn.cu
+## Quickstart: Compiling & Running
 
-### Design
-
-Implements a flexible message passing GNN with explicit CPU-GPU data transfer and direct control. All weights, gradients, graph features, and model states are available for diagnosis or research hacking. CUDA kernels handle forward, backward, and aggregation passes.
-
-### Usage
-
+**CUDA:**
 ```bash
+# Direct GNN (classic, programmable)
 nvcc -O3 -std=c++14 gnn.cu -o gnn_cuda
+
+# Facade GNN (introspectable, C++17)
+nvcc -O3 -std=c++17 facaded_gnn.cu -o facaded_gnn_cuda
 ```
-Example: Use as a linked library/module in your custom driver (see code for instantiation and API).
 
-### Arguments
+**OpenCL:**
+```bash
+# Direct OpenCL GNN
+g++ -O2 -std=c++11 -o gnn_opencl gnn_opencl.cpp -lOpenCL
 
-#### Model Constructor
-
-- `featureSize`: Per-node input feature dimension (`int`)
-- `hiddenSize`: Hidden feature dimension (`int`)
-- `outputSize`: Output vector size per graph (`int`)
-- `numMPLayers`: Number of message-passing layers
-
-#### Other Model Parameters (Setters or direct member access)
-
-- `learningRate`: (double, default 0.01)
-- `maxIterations`: (int, default 100)
-- `activation`: Activation function: `atReLU`, `atLeakyReLU`, `atTanh`, `atSigmoid`
-- `lossFunction`: Loss: `ltMSE`, `ltBinaryCrossEntropy`
-- `Config` (on TGraph):: Controls undirected, self-loop, deduplication booleans
-
-#### Graph Configuration
-
-- `TGraph` struct inputs:
-  - `NumNodes`
-  - `NodeFeatures` (per node float vector)
-  - `Edges` (array of `{Source, Target}`) with methods for deduplication, reversing, and self-loops
-  - `AdjacencyList` (built automatically from Edges)
-
-### Public Methods
-
-Class: `TGraphNeuralNetwork`
-
-- Model:
-  - `Predict(TGraph&)` — Returns output for a graph.
-  - `double Train(TGraph&, const TDoubleArray& target)` — Runs one training step.
-  - `void TrainMultiple(TGraph&, const TDoubleArray& target, int iters)` — Trains for N iters.
-  - `void SaveModel(std::string path)` and `LoadModel(std::string path)`
-  - Getters/setters for architecture, learning rate, metrics, etc.
-- Graph utilities:
-  - `DeduplicateEdges`, `AddReverseEdges`, `AddSelfLoops`, `ValidateGraph`
-  - Adjacency list logic baked in.
-- Layers:
-  - All layers (message, update, readout, output) accessible for custom inspection/hacking.
-- GPU utilities:
-  - `InitializeGPU`, `FreeGPU`, `SyncToGPU`, `SyncFromGPU`
-- Loss:
-  - `ComputeLoss`, `ComputeLossGradient` (MSE or BCE)
+# Facade OpenCL GNN
+g++ -O2 -std=c++11 -o facaded_gnn_opencl facaded_gnn_opencl.cpp -lOpenCL
+```
 
 ---
 
-## facaded_gnn.cu (GNN Facade)
+## CLI Usage and Help
 
-### Design
+Below are templates for running each GNN mode with command-line arguments, including help output and typical commands.
 
-A modernized GNN abstraction with advanced graph and network diagnostics and user-friendly methods for data science, research, and education. Written in C++17 with CUDA, it supports Python-like exploration of graphs and the underlying network.
+---
 
-### Usage
+### 1. CUDA GNN (`gnn.cu`)
+
+No built-in CLI — **use as a class/module** or write your own driver (see the file for API and function call usage). Key arguments/types for constructor:
+
+- `featureSize`, `hiddenSize`, `outputSize`, `numMPLayers` (message-passing layers)  
+- `SetLearningRate(double)`, `SetActivation(ActivationType)`, `SetLossFunction(LossType)`, ...  
+- `Train(TGraph&, target)`, `Predict(TGraph&)`, `SaveModel`, `LoadModel`  
+- Graph: Use `TGraph` struct (see code)
+
+Example (in C++):
+```cpp
+#include "gnn.cu"
+TGraphNeuralNetwork gnn(3, 16, 2, 2);
+gnn.SetLearningRate(0.01);
+gnn.SetLossFunction(ltMSE);
+double loss = gnn.Train(your_graph, your_target_array);
+auto output = gnn.Predict(your_graph);
+```
+
+---
+
+### 2. OpenCL GNN (`gnn_opencl.cpp`)
+
+Run with no args to print help, or use commands below.
 
 ```bash
-nvcc -O3 -std=c++17 facaded_gnn.cu -o gnn_facade_cuda
+./gnn_opencl help
 ```
-Embed in your C++17 project or call as an executable for custom scripting/classroom use.
 
-### Arguments
+##### **Help Output (abridged):**
+```
+GNN-OpenCL - Command-line Graph Neural Network (GPU-Accelerated)
 
-#### Facade Constructor
+Commands:
+  create   Create a new GNN model
+  train    Train an existing model with graph data
+  predict  Make predictions with a trained model
+  info     Display model information
+  help     Show this help message
 
-Class: `CUDAGNNFacade`
+Create Options:
+  --feature=N          Input feature size (required)
+  --hidden=N           Hidden layer size (required)
+  --output=N           Output size (required)
+  --mp-layers=N        Message passing layers (required)
+  --save=FILE          Save model to file (required)
+  --lr=VALUE           Learning rate (default: 0.01)
+  --activation=TYPE    relu|leakyrelu|tanh|sigmoid
+  --loss=TYPE          mse|bce
 
-- `featureSize`: Number of features per node
-- `hiddenSize`: Internal dimension
-- `outputSize`: Model output dimension
-- `numMPLayers`: Number of message passing layers
+Train Options:
+  --model=FILE         Model file to load (required)
+  --graph=FILE         Graph file (JSON format) (required)
+  --save=FILE          Save trained model to file (required)
+  --epochs=N           Number of training epochs (default: 100)
+  --lr=VALUE           Override learning rate
+  --verbose            Show training progress
 
-#### Graph Methods
+Predict Options:
+  --model=FILE         Model file to load (required)
+  --graph=FILE         Graph file (required)
 
-- `createEmptyGraph(numNodes, featureSize)`
-- `setNodeFeature(nodeIdx, featureIdx, value)` / `setNodeFeatures(nodeIdx, FloatArray)`
-- `addEdge(source, target [, features])`
-- `removeEdge(edgeIdx)`
-- `rebuildAdjacencyList()`
+Info Options:
+  --model=FILE         Model file to load (required)
+```
 
-#### Core Training/Prediction
+**Examples:**
+```bash
+# Create a model
+./gnn_opencl create --feature=3 --hidden=16 --output=2 --mp-layers=2 --save=my_gnn.bin
 
-- `predict()`: Returns output for the loaded/created graph
-- `train(targetFloatArray)`: Returns loss on batch
-- `trainMultiple(targetFloatArray, iters)`
+# Train for 500 epochs
+./gnn_opencl train --model=my_gnn.bin --graph=your_graph.json --epochs=500 --save=gnn_trained.bin
 
-#### Saving/Loading
+# Predict output for a graph
+./gnn_opencl predict --model=gnn_trained.bin --graph=your_graph.json
 
-- `saveModel(filename)`
-- `loadModel(filename)`
-
-### Public Methods
-
-Class: `CUDAGNNFacade`
-
-- **Node & Edge:**
-  - `getNodeFeature(node, idx)`, `setNodeFeature(node, idx, value)`
-  - `getNodeFeatures(node)`, `setNodeFeatures(node, FloatArray)`
-  - `addEdge(source, target [, features])`, `removeEdge(edgeIdx)`
-  - `getEdgeEndpoints(edgeIdx)`, `getEdgeFeatures(edgeIdx)`, `setEdgeFeatures(edgeIdx, FloatArray)`
-  - `hasEdge(source, target)`, `findEdgeIndex(source, target)`
-  - `getNeighbors(node)`, `getInDegree(node)`, `getOutDegree(node)`
-
-- **Graph:**
-  - `rebuildAdjacencyList()`, `createEmptyGraph(numNodes, featureSize)`
-
-- **Prediction/Training:**
-  - `predict()`, `train(target)`, `trainMultiple(target, iters)`
-
-- **Persistence:**
-  - `saveModel(filename)`, `loadModel(filename)`
-
-- **Network Introspection:**
-  - `getArchitectureSummary()`: Prints all network shapes, param counts, and hyperparameters.
-  - `getGraphEmbedding()`: Returns the latest graph embedding vector.
-
-- **(Advanced / Internal in main classes)**
-  - Forward/backward through each layer, input/output gradient access, full weight serialization.
+# Get info about a trained model
+./gnn_opencl info --model=gnn_trained.bin
+```
 
 ---
 
-## Data Structures
+### 3. CUDA Facade (`facaded_gnn.cu`)
 
-- `TGraph` / `Graph`: Nodes, features, adjacency, edge lists.
-- `TLayer`, `TGPULayer` / `GPULayer`: All layer weights/biases/gradients accessible.
-- Facade edge/node masks, edge features.
-- Embedding history and gradient flow info for detailed debugging (facade).
-- All layer and model weights serializable via disk save/load.
+No command-line utility. Use as a C++17 class for fully **pythonic graph manipulation/introspection**.
+
+**Key class:** `CUDAGNNFacade`
+
+**Initialization and usage:**
+```cpp
+#include "facaded_gnn.cu"
+CUDAGNNFacade gnn(3, 16, 2, 2);
+gnn.createEmptyGraph(numNodes, 3);
+gnn.setNodeFeature(0, 0, 1.0f);            // Set a node's feature
+gnn.addEdge(0, 1);
+auto output = gnn.predict();
+float loss = gnn.train({0.1, 0.2});
+gnn.saveModel("out.bin");
+```
+
+- **Node/edge/graph introspection**:  
+  - `getNeighbors(node)`, `getInDegree(node)`, `getOutDegree(node)`, ...
+  - `getNodeFeature(node,i)`, `setNodeFeature(node,i,v)` and batch setters
+  - `getEdgeEndpoints(edgeIdx)`, `getEdgeFeatures(edgeIdx)`, `setEdgeFeatures(edgeIdx,v)`
+  - Architecture/hyperparam info: `getArchitectureSummary()`
+  - Graph embedding: `getGraphEmbedding()`
+- **Train/save/load**:  
+  - `train(target)`, `trainMultiple(target, iters)`, `saveModel`, `loadModel`
 
 ---
 
-## Overview & Notes
+### 4. OpenCL Facade (`facaded_gnn_opencl.cpp`)
 
-- Both "bare" and "facade" APIs are fully hackable; you can extract, modify, and visualize every tensor, graph, or parameter.
-- The `facaded_gnn.cu` facade allows for rapid graph experimentation or as a learning/teaching reference model.
-- For input/output, use the code's detailed type definitions and comments.
-- No external deep learning libraries are required.
+Run for **fully-featured introspectable CLI**:
+
+```bash
+./facaded_gnn_opencl      # Prints help/usage summary
+./facaded_gnn_opencl help # Detailed help output
+```
+
+##### **Help Output (abridged):**
+```
+GNN-Facade - Graph Neural Network with Facade Pattern (GPU-Accelerated)
+Usage:
+  facade-gnn <command> [options]
+
+COMMANDS:
+  create         Create a new GNN model
+  add-node       Add node to the graph
+  add-edge       Add an edge
+  remove-edge    Remove an edge
+  predict        Predict for a graph
+  train          Train the model
+  degree         Node degree
+  in-degree      Node in-degree
+  out-degree     Node out-degree
+  neighbors      Get node neighbors
+  pagerank       Compute PageRank
+  save           Save model to file
+  load           Load model from file
+  info           Model information
+  gradient-flow  Gradient flow analysis
+  help           Show this help message
+
+NETWORK FUNCTIONS:
+  create         --feature=N --hidden=N --output=N --mp-layers=N --model=FILE
+  predict        --model=FILE --graph=FILE
+  train          --model=FILE --graph=FILE --target=FILE --epochs=N --save=FILE
+
+EXAMPLES:
+  facade-gnn create --feature=3 --hidden=16 --output=2 --mp-layers=2 --model=my.bin
+  facade-gnn degree --model=my.bin --node=0
+  facade-gnn pagerank --model=my.bin --damping=0.85 --iterations=20
+  facade-gnn train --model=my.bin --graph=my.csv --target=target.csv --epochs=100 --save=trained.bin
+  facade-gnn predict --model=trained.bin --graph=my.csv
+```
 
 ---
+
 
 ## License
 
-MIT License, Copyright © 2025 Matthew Abbott
+MIT License  
+© 2025 Matthew Abbott
 
 ---
