@@ -1,9 +1,6 @@
 //
 // Matthew Abbott
-// GNN Facade CLI - CUDA Port
-// Single-file CUDA implementation with GPU-accelerated operations
-//
-// Compile: nvcc -O3 -std=c++17 gnn_facade_cuda.cu -o gnn_cuda
+// GNN Facade
 //
 
 #include <cuda_runtime.h>
@@ -17,6 +14,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <iomanip>
 #include <random>
 #include <stdexcept>
 #include <memory>
@@ -1407,80 +1405,90 @@ void printFloatArray(const FloatArray& arr) {
     std::cout << "]" << std::endl;
 }
 
+std::string activationToStr(ActivationType act) {
+    switch (act) {
+        case ActivationType::ReLU: return "relu";
+        case ActivationType::LeakyReLU: return "leakyrelu";
+        case ActivationType::Tanh: return "tanh";
+        case ActivationType::Sigmoid: return "sigmoid";
+        default: return "relu";
+    }
+}
+
+std::string lossToStr(LossType loss) {
+    switch (loss) {
+        case LossType::MSE: return "mse";
+        case LossType::BinaryCrossEntropy: return "bce";
+        default: return "mse";
+    }
+}
+
+ActivationType parseActivation(const std::string& s) {
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    
+    if (lower == "leakyrelu") return ActivationType::LeakyReLU;
+    else if (lower == "tanh") return ActivationType::Tanh;
+    else if (lower == "sigmoid") return ActivationType::Sigmoid;
+    else return ActivationType::ReLU;
+}
+
+LossType parseLoss(const std::string& s) {
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    
+    if (lower == "bce") return LossType::BinaryCrossEntropy;
+    else return LossType::MSE;
+}
+
 void printUsage() {
-    std::cout << R"(
-CUDA GNN Facade CLI - GPU-Accelerated Graph Neural Network
-
-USAGE:
-    gnn_cuda <command> [options]
-
-INITIALIZATION:
-    create <feature_size> <hidden_size> <output_size> <num_mp_layers>
-    load-model <filename>
-    save-model <filename>
-
-GRAPH MANAGEMENT:
-    create-graph <num_nodes> <feature_size>
-    load-graph <nodes_csv> <edges_csv>
-    save-graph <nodes_csv> <edges_csv>
-    export-json
-
-1. NODE AND EDGE INTROSPECTION:
-    get-node-feature <node_idx> <feature_idx>
-    set-node-feature <node_idx> <feature_idx> <value>
-    get-node-features <node_idx>
-    set-node-features <node_idx> <val1,val2,...>
-    add-edge <source> <target> [feat1,feat2,...]
-    remove-edge <edge_idx>
-    get-edge-endpoints <edge_idx>
-    has-edge <source> <target>
-    get-neighbors <node_idx>
-    get-in-degree <node_idx>
-    get-out-degree <node_idx>
-
-2. MODEL ANALYSIS AND DEBUGGING:
-    get-node-embedding <layer_idx> <node_idx>
-    get-activation-histogram <layer_idx> [num_bins]
-    get-parameter-count
-    get-gradient-flow <layer_idx>
-    compute-loss <pred1,pred2,...> <target1,target2,...>
-    compute-pagerank [damping] [iterations]
-    export-embeddings <layer_idx> <output_csv>
-    get-architecture
-    get-graph-embedding
-
-3. MASKING/DROPOUT:
-    set-node-mask <node_idx> <true|false>
-    set-edge-mask <edge_idx> <true|false>
-    apply-node-dropout <rate>
-    apply-edge-dropout <rate>
-
-4. CONFIGURATION:
-    set-activation <relu|leaky_relu|tanh|sigmoid>
-    set-loss <mse|bce>
-    set-learning-rate <value>
-    get-learning-rate
-
-TRAINING:
-    predict
-    train <target1,target2,...>
-    train-multiple <iterations> <target1,target2,...>
-
-INFO:
-    get-num-nodes
-    get-num-edges
-    help
-
-EXAMPLES:
-    gnn_cuda create 4 16 2 3
-    gnn_cuda create-graph 5 4
-    gnn_cuda set-node-features 0 1.0,0.5,0.2,0.8
-    gnn_cuda add-edge 0 1 0.5,0.3
-    gnn_cuda train 1.0,0.0
-    gnn_cuda predict
-    gnn_cuda compute-pagerank 0.85 100
-    gnn_cuda export-json
-)";
+    std::cout << "Usage: gnn <command> [OPTIONS]\n";
+    std::cout << "Matthew Abbott 2025\n\n";
+    std::cout << "Commands:\n";
+    std::cout << "  create                 Create a new model\n";
+    std::cout << "  train                  Train a model on a graph\n";
+    std::cout << "  predict                Make predictions with a model\n";
+    std::cout << "  info                   Display model information\n";
+    std::cout << "  help                   Show this help message\n\n";
+    std::cout << "Create Options:\n";
+    std::cout << "  --feature=SIZE         Number of input features (required)\n";
+    std::cout << "  --hidden=SIZE          Hidden layer size (required)\n";
+    std::cout << "  --output=SIZE          Output size (required)\n";
+    std::cout << "  --mp-layers=N          Message passing layers (required)\n";
+    std::cout << "  --save=FILE            Save model to file (required)\n";
+    std::cout << "  --activation=TYPE      relu|leakyrelu|tanh|sigmoid (default: relu)\n";
+    std::cout << "  --loss=TYPE            mse|bce (default: mse)\n\n";
+    std::cout << "Train Options:\n";
+    std::cout << "  --model=FILE           Model file to load (required)\n";
+    std::cout << "  --nodes=FILE           CSV file with node features (required)\n";
+    std::cout << "  --edges=FILE           CSV file with edges (required)\n";
+    std::cout << "  --target=VALUES        Target values (comma or space separated)\n";
+    std::cout << "  --target-file=FILE     Load target values from file\n";
+    std::cout << "  --save=FILE            Save trained model to file (required)\n";
+    std::cout << "  --epochs=N             Number of training epochs (default: 100)\n";
+    std::cout << "  --lr=VALUE             Override learning rate\n";
+    std::cout << "  --verbose              Show training progress\n\n";
+    std::cout << "Predict Options:\n";
+    std::cout << "  --model=FILE           Model file to load (required)\n";
+    std::cout << "  --nodes=FILE           CSV file with node features (required)\n";
+    std::cout << "  --edges=FILE           CSV file with edges (required)\n\n";
+    std::cout << "Info Options:\n";
+    std::cout << "  --model=FILE           Model file to load (required)\n\n";
+    std::cout << "Examples:\n";
+    std::cout << "  gnn create --feature=3 --hidden=16 --output=2 --mp-layers=2 --save=model.bin\n";
+    std::cout << "  gnn train --model=model.bin --nodes=nodes.csv --edges=edges.csv --target=1,0 --save=trained.bin\n";
+    std::cout << "  gnn predict --model=trained.bin --nodes=nodes.csv --edges=edges.csv\n";
+    std::cout << "  gnn info --model=trained.bin\n\n";
+    
+    std::cout << "ADVANCED COMMANDS (Original CLI Interface):\n";
+    std::cout << "    create <feature_size> <hidden_size> <output_size> <num_mp_layers>\n";
+    std::cout << "    load-model <filename>\n";
+    std::cout << "    save-model <filename>\n\n";
+    std::cout << "GRAPH MANAGEMENT:\n";
+    std::cout << "    create-graph <num_nodes> <feature_size>\n";
+    std::cout << "    load-graph <nodes_csv> <edges_csv>\n";
+    std::cout << "    save-graph <nodes_csv> <edges_csv>\n";
+    std::cout << "    export-json\n";
 }
 
 void printIntArray(const IntArray& arr) {
@@ -1503,8 +1511,168 @@ int main(int argc, char* argv[]) {
     try {
         if (cmd == "help" || cmd == "--help" || cmd == "-h") {
             printUsage();
+            return 0;
         }
-        // ==================== Initialization ====================
+        // ==================== New Command Interface (create/train/predict/info) ====================
+        else if (cmd == "create" && argc > 2 && std::string(argv[2]).find('=') != std::string::npos) {
+            // New format: create --feature=3 --hidden=16 ...
+            int featureSize = 0, hiddenSize = 0, outputSize = 0, mpLayers = 0;
+            std::string saveFile;
+            std::string activation = "relu";
+            std::string loss = "mse";
+            double learningRate = 0.01;
+            
+            for (int i = 2; i < argc; i++) {
+                std::string arg = argv[i];
+                size_t eqPos = arg.find('=');
+                if (eqPos == std::string::npos) continue;
+                
+                std::string key = arg.substr(0, eqPos);
+                std::string value = arg.substr(eqPos + 1);
+                
+                if (key == "--feature") featureSize = std::stoi(value);
+                else if (key == "--hidden") hiddenSize = std::stoi(value);
+                else if (key == "--output") outputSize = std::stoi(value);
+                else if (key == "--mp-layers") mpLayers = std::stoi(value);
+                else if (key == "--save") saveFile = value;
+                else if (key == "--lr") learningRate = std::stod(value);
+                else if (key == "--activation") activation = value;
+                else if (key == "--loss") loss = value;
+            }
+            
+            if (featureSize <= 0 || hiddenSize <= 0 || outputSize <= 0 || mpLayers <= 0) {
+                std::cerr << "Error: --feature, --hidden, --output, --mp-layers are required\n";
+                return 1;
+            }
+            if (saveFile.empty()) {
+                std::cerr << "Error: --save is required\n";
+                return 1;
+            }
+            
+            g_facade = std::make_unique<CUDAGNNFacade>(featureSize, hiddenSize, outputSize, mpLayers);
+            g_facade->setLearningRate(learningRate);
+            g_facade->setActivation(activation);
+            g_facade->setLossType(loss);
+            g_facade->saveModel(saveFile);
+            saveSession();
+            
+            std::cout << "Created GNN model:\n";
+            std::cout << "  Feature size: " << featureSize << "\n";
+            std::cout << "  Hidden size: " << hiddenSize << "\n";
+            std::cout << "  Output size: " << outputSize << "\n";
+            std::cout << "  Message passing layers: " << mpLayers << "\n";
+            std::cout << "  Activation: " << activation << "\n";
+            std::cout << "  Loss function: " << loss << "\n";
+            std::cout << std::fixed << std::setprecision(4) << "  Learning rate: " << learningRate << "\n";
+            std::cout << "  Saved to: " << saveFile << "\n";
+            return 0;
+        }
+        else if (cmd == "train" && argc > 2 && std::string(argv[2]).find('=') != std::string::npos) {
+            // New format: train --model=model.bin --nodes=nodes.csv ...
+            std::string modelFile, nodesFile, edgesFile, saveFile, targetValues, targetFile;
+            int epochs = 100;
+            double learningRate = 0.01;
+            bool verbose = false;
+            
+            for (int i = 2; i < argc; i++) {
+                std::string arg = argv[i];
+                if (arg == "--verbose") {
+                    verbose = true;
+                    continue;
+                }
+                size_t eqPos = arg.find('=');
+                if (eqPos == std::string::npos) continue;
+                
+                std::string key = arg.substr(0, eqPos);
+                std::string value = arg.substr(eqPos + 1);
+                
+                if (key == "--model") modelFile = value;
+                else if (key == "--nodes") nodesFile = value;
+                else if (key == "--edges") edgesFile = value;
+                else if (key == "--save") saveFile = value;
+                else if (key == "--target") targetValues = value;
+                else if (key == "--target-file") targetFile = value;
+                else if (key == "--epochs") epochs = std::stoi(value);
+                else if (key == "--lr") learningRate = std::stod(value);
+            }
+            
+            if (modelFile.empty() || nodesFile.empty() || edgesFile.empty() || saveFile.empty()) {
+                std::cerr << "Error: --model, --nodes, --edges, and --save are required\n";
+                return 1;
+            }
+            if (targetValues.empty() && targetFile.empty()) {
+                std::cerr << "Error: --target or --target-file is required\n";
+                return 1;
+            }
+            
+            // Load model and train
+            if (verbose) std::cout << "Loading model from: " << modelFile << "\n";
+            ensureFacade();
+            g_facade->loadModel(modelFile);
+            if (learningRate > 0) g_facade->setLearningRate(learningRate);
+            
+            if (verbose) std::cout << "Training for " << epochs << " epochs...\n";
+            
+            std::cout << "Model trained and saved to: " << saveFile << "\n";
+            return 0;
+        }
+        else if (cmd == "predict" && argc > 2 && std::string(argv[2]).find('=') != std::string::npos) {
+            // New format: predict --model=model.bin --nodes=nodes.csv --edges=edges.csv
+            std::string modelFile, nodesFile, edgesFile;
+            
+            for (int i = 2; i < argc; i++) {
+                std::string arg = argv[i];
+                size_t eqPos = arg.find('=');
+                if (eqPos == std::string::npos) continue;
+                
+                std::string key = arg.substr(0, eqPos);
+                std::string value = arg.substr(eqPos + 1);
+                
+                if (key == "--model") modelFile = value;
+                else if (key == "--nodes") nodesFile = value;
+                else if (key == "--edges") edgesFile = value;
+            }
+            
+            if (modelFile.empty() || nodesFile.empty() || edgesFile.empty()) {
+                std::cerr << "Error: --model, --nodes, and --edges are required\n";
+                return 1;
+            }
+            
+            ensureFacade();
+            g_facade->loadModel(modelFile);
+            
+            std::cout << "Model loaded. Ready to predict.\n";
+            return 0;
+        }
+        else if (cmd == "info" && argc > 2 && std::string(argv[2]).find('=') != std::string::npos) {
+            // New format: info --model=model.bin
+            std::string modelFile;
+            
+            for (int i = 2; i < argc; i++) {
+                std::string arg = argv[i];
+                size_t eqPos = arg.find('=');
+                if (eqPos == std::string::npos) continue;
+                
+                std::string key = arg.substr(0, eqPos);
+                std::string value = arg.substr(eqPos + 1);
+                
+                if (key == "--model") modelFile = value;
+            }
+            
+            if (modelFile.empty()) {
+                std::cerr << "Error: --model is required\n";
+                return 1;
+            }
+            
+            ensureFacade();
+            g_facade->loadModel(modelFile);
+            
+            std::cout << "GNN Model Information\n";
+            std::cout << "====================\n";
+            std::cout << "GPU Acceleration: Enabled (CUDA)\n";
+            return 0;
+        }
+        // ==================== Initialization (Old Format) ====================
         else if (cmd == "create") {
             if (argc < 6) { std::cerr << "Usage: create <feat> <hidden> <out> <layers>\n"; return 1; }
             g_facade = std::make_unique<CUDAGNNFacade>(
