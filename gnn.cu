@@ -1154,6 +1154,7 @@ void TGraphNeuralNetwork::LoadModel(const string& Filename) {
 
 void PrintUsage() {
    cout << "GNN - Graph Neural Network (CUDA)" << endl;
+   cout << "Matthew Abbott 2025"<< endl;
    cout << endl;
    cout << "Usage: gnn_cuda --nodes FILE --edges FILE [options]" << endl;
    cout << "       gnn_cuda --load MODEL [options]" << endl;
