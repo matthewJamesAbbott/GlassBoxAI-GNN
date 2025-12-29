@@ -1,6 +1,6 @@
 //
 // Matthew Abbott
-// Graph Neural Network - CUDA Port
+// Graph Neural Network
 //
 
 #include <iostream>
@@ -20,23 +20,54 @@ const int MAX_NODES = 1000;
 const int MAX_EDGES = 10000;
 const int MAX_ITERATIONS = 10000;
 const double GRADIENT_CLIP = 5.0;
+const string MODEL_MAGIC = "GNNBKND01";
 const int BLOCK_SIZE = 256;
 
-enum TActivationType { atReLU, atLeakyReLU, atTanh, atSigmoid };
-enum TLossType { ltMSE, ltBinaryCrossEntropy };
+enum ActivationType {
+    atReLU,
+    atLeakyReLU,
+    atTanh,
+    atSigmoid
+};
+
+enum LossType {
+    ltMSE,
+    ltBinaryCrossEntropy
+};
+
+enum Command {
+    cmdNone,
+    cmdCreate,
+    cmdTrain,
+    cmdPredict,
+    cmdInfo,
+    cmdHelp
+};
 
 typedef vector<double> TDoubleArray;
+typedef vector<float> TFloatArray;
 typedef vector<int> TIntArray;
 typedef vector<TDoubleArray> TDouble2DArray;
 
 #define CUDA_CHECK(call) \
-   do { \
-      cudaError_t err = call; \
-      if (err != cudaSuccess) { \
-         cerr << "CUDA error at " << __FILE__ << ":" << __LINE__ << ": " << cudaGetErrorString(err) << endl; \
-         exit(1); \
-      } \
-   } while(0)
+    do { \
+       cudaError_t err = call; \
+       if (err != cudaSuccess) { \
+          cerr << "CUDA error at " << __FILE__ << ":" << __LINE__ << ": " << cudaGetErrorString(err) << endl; \
+          exit(1); \
+       } \
+    } while(0)
+
+struct TGPULayer {
+    double* d_Weights;
+    double* d_Biases;
+    double* d_Output;
+    double* d_PreActivations;
+    double* d_Errors;
+    double* d_LastInput;
+    int NumInputs;
+    int NumOutputs;
+};
 
 // ==================== CUDA Kernels ====================
 
@@ -237,300 +268,303 @@ typedef vector<TMessageInfo> TNodeMessages;
 typedef vector<TNodeMessages> TLayerMessages;
 
 struct TTrainingMetrics {
-   double Loss;
-   int Iteration;
-   TDoubleArray LossHistory;
-};
-
-struct TGPULayer {
-   double* d_Weights;
-   double* d_Biases;
-   double* d_Output;
-   double* d_PreActivations;
-   double* d_Errors;
-   double* d_LastInput;
-   int NumInputs;
-   int NumOutputs;
+    double Loss;
+    int Iteration;
+    TDoubleArray LossHistory;
 };
 
 // ==================== Helper Functions ====================
 
 TDoubleArray CopyArray(const TDoubleArray& Src) {
-   return Src;
+    return TDoubleArray(Src);
 }
 
 TDoubleArray ConcatArrays(const TDoubleArray& A, const TDoubleArray& B) {
-   TDoubleArray Result;
-   Result.reserve(A.size() + B.size());
-   for (size_t I = 0; I < A.size(); I++)
-      Result.push_back(A[I]);
-   for (size_t I = 0; I < B.size(); I++)
-      Result.push_back(B[I]);
-   return Result;
+    TDoubleArray Result;
+    Result.insert(Result.end(), A.begin(), A.end());
+    Result.insert(Result.end(), B.begin(), B.end());
+    return Result;
 }
 
 TDoubleArray ZeroArray(int Size) {
-   TDoubleArray Result(Size, 0.0);
-   return Result;
+    return TDoubleArray(Size, 0.0);
 }
 
 TDoubleArray PadArray(const TDoubleArray& Src, int NewSize) {
-   TDoubleArray Result = ZeroArray(NewSize);
-   int Limit = min((int)Src.size(), NewSize);
-   for (int I = 0; I < Limit; I++)
-      Result[I] = Src[I];
-   return Result;
+    TDoubleArray Result = ZeroArray(NewSize);
+    for (int i = 0; i < min((int)Src.size(), NewSize); i++)
+        Result[i] = Src[i];
+    return Result;
+}
+
+// Convert double to float
+TFloatArray DoubleToFloat(const TDoubleArray& src) {
+    TFloatArray dst(src.size());
+    for (size_t i = 0; i < src.size(); i++)
+        dst[i] = (float)src[i];
+    return dst;
+}
+
+// Convert float to double
+TDoubleArray FloatToDouble(const TFloatArray& src) {
+    TDoubleArray dst(src.size());
+    for (size_t i = 0; i < src.size(); i++)
+        dst[i] = (double)src[i];
+    return dst;
 }
 
 // ==================== TGraphNeuralNetwork ====================
 
 class TGraphNeuralNetwork {
 private:
-   double FLearningRate;
-   int FMaxIterations;
-   int FNumMessagePassingLayers;
-   int FFeatureSize;
-   int FHiddenSize;
-   int FOutputSize;
-   TActivationType FActivation;
-   TLossType FLossType;
-   
-   vector<TLayer> FMessageLayers;
-   vector<TLayer> FUpdateLayers;
-   TLayer FReadoutLayer;
-   TLayer FOutputLayer;
-   
-   vector<TGPULayer> FGPUMessageLayers;
-   vector<TGPULayer> FGPUUpdateLayers;
-   TGPULayer FGPUReadoutLayer;
-   TGPULayer FGPUOutputLayer;
-   
-   TDouble2DArray FNodeEmbeddings;
-   TDouble2DArray FNewNodeEmbeddings;
-   vector<TDouble2DArray> FEmbeddingHistory;
-   vector<TLayerMessages> FMessageHistory;
-   vector<TDouble2DArray> FAggregatedMessages;
-   TDoubleArray FGraphEmbedding;
-   
-   TTrainingMetrics FMetrics;
-   bool FGPUInitialized;
-   
-   void InitializeLayer(TLayer& Layer, int NumNeurons, int NumInputs);
-   void InitializeGPULayer(TGPULayer& GPULayer, const TLayer& Layer);
-   void FreeGPULayer(TGPULayer& GPULayer);
-   void SyncLayerToGPU(TGPULayer& GPULayer, const TLayer& Layer);
-   void SyncLayerFromGPU(TLayer& Layer, const TGPULayer& GPULayer);
-   
-   void BuildAdjacencyList(TGraph& Graph);
-   void MessagePassing(TGraph& Graph);
-   void Readout(TGraph& Graph);
-   TDoubleArray ForwardLayerGPU(TGPULayer& GPULayer, const TDoubleArray& Input, bool UseOutputActivation);
-   void BackwardLayerGPU(TGPULayer& GPULayer, const TDoubleArray& UpstreamGrad, bool UseOutputActivation);
-   TDoubleArray GetLayerInputGradGPU(TGPULayer& GPULayer, const TDoubleArray& UpstreamGrad, bool UseOutputActivation);
-   void BackPropagateGraph(TGraph& Graph, const TDoubleArray& Target);
-   
-   double Activate(double X);
-   double ActivateDerivative(double X);
-   double OutputActivate(double X);
-   double OutputActivateDerivative(double PreAct);
-   double ClipGradient(double G);
+    double FLearningRate;
+    int FMaxIterations;
+    int FNumMessagePassingLayers;
+    int FFeatureSize;
+    int FHiddenSize;
+    int FOutputSize;
+    ActivationType FActivation;
+    LossType FLossType;
+    
+    vector<TLayer> FMessageLayers;
+    vector<TLayer> FUpdateLayers;
+    TLayer FReadoutLayer;
+    TLayer FOutputLayer;
+    
+    vector<TGPULayer> FGPUMessageLayers;
+    vector<TGPULayer> FGPUUpdateLayers;
+    TGPULayer FGPUReadoutLayer;
+    TGPULayer FGPUOutputLayer;
+    
+    TDouble2DArray FNodeEmbeddings;
+    TDouble2DArray FNewNodeEmbeddings;
+    vector<TDouble2DArray> FEmbeddingHistory;
+    vector<TLayerMessages> FMessageHistory;
+    vector<TDouble2DArray> FAggregatedMessages;
+    TDoubleArray FGraphEmbedding;
+    
+    TTrainingMetrics FMetrics;
+    bool FGPUInitialized;
+    
+    void InitializeLayer(TLayer& Layer, int NumNeurons, int NumInputs);
+    void InitializeGPULayer(TGPULayer& GPULayer, const TLayer& Layer);
+    void FreeGPULayer(TGPULayer& GPULayer);
+    void SyncLayerToGPU(TGPULayer& GPULayer, const TLayer& Layer);
+    void SyncLayerFromGPU(TLayer& Layer, const TGPULayer& GPULayer);
+    
+    void BuildAdjacencyList(TGraph& Graph);
+    void MessagePassing(TGraph& Graph);
+    void Readout(TGraph& Graph);
+    TDoubleArray ForwardLayerGPU(TGPULayer& GPULayer, const TDoubleArray& Input, bool UseOutputActivation);
+    void BackwardLayerGPU(TGPULayer& GPULayer, const TDoubleArray& UpstreamGrad, bool UseOutputActivation);
+    TDoubleArray GetLayerInputGradGPU(TGPULayer& GPULayer, const TDoubleArray& UpstreamGrad, bool UseOutputActivation);
+    void BackPropagateGraph(TGraph& Graph, const TDoubleArray& Target);
+    
+    double Activate(double X);
+    double ActivateDerivative(double X);
+    double OutputActivate(double X);
+    double OutputActivateDerivative(double PreAct);
+    double ClipGradient(double G);
    
 public:
-   TGraphNeuralNetwork(int AFeatureSize, int AHiddenSize, int AOutputSize, int NumMPLayers);
-   ~TGraphNeuralNetwork();
-   
-   void InitializeGPU();
-   void FreeGPU();
-   void SyncToGPU();
-   void SyncFromGPU();
-   
-   TDoubleArray Predict(TGraph& Graph);
-   double Train(TGraph& Graph, const TDoubleArray& Target);
-   void TrainMultiple(TGraph& Graph, const TDoubleArray& Target, int Iterations);
-   
-   double ComputeLoss(const TDoubleArray& Prediction, const TDoubleArray& Target);
-   TDoubleArray ComputeLossGradient(const TDoubleArray& Prediction, const TDoubleArray& Target);
-   
-   void SaveModel(const string& Filename);
-   void LoadModel(const string& Filename);
-   
-   static void ValidateGraph(TGraph& Graph, vector<string>& Errors);
-   static void DeduplicateEdges(TGraph& Graph);
-   static void AddReverseEdges(TGraph& Graph);
-   static void AddSelfLoops(TGraph& Graph);
-   
-   double GetLearningRate() const { return FLearningRate; }
-   void SetLearningRate(double Value) { FLearningRate = Value; }
-   int GetMaxIterations() const { return FMaxIterations; }
-   void SetMaxIterations(int Value) { FMaxIterations = Value; }
-   TActivationType GetActivation() const { return FActivation; }
-   void SetActivation(TActivationType Value) { FActivation = Value; }
-   TLossType GetLossFunction() const { return FLossType; }
-   void SetLossFunction(TLossType Value) { FLossType = Value; }
-   TTrainingMetrics GetMetrics() const { return FMetrics; }
+    TGraphNeuralNetwork(int AFeatureSize, int AHiddenSize, int AOutputSize, int NumMPLayers);
+    ~TGraphNeuralNetwork();
+    
+    void InitializeGPU();
+    void FreeGPU();
+    void SyncToGPU();
+    void SyncFromGPU();
+    
+    TDoubleArray Predict(TGraph& Graph);
+    double Train(TGraph& Graph, const TDoubleArray& Target);
+    void TrainMultiple(TGraph& Graph, const TDoubleArray& Target, int Iterations);
+    
+    double ComputeLoss(const TDoubleArray& Prediction, const TDoubleArray& Target);
+    TDoubleArray ComputeLossGradient(const TDoubleArray& Prediction, const TDoubleArray& Target);
+    
+    void SaveModel(const string& Filename);
+    void LoadModel(const string& Filename);
+    
+    static void ValidateGraph(TGraph& Graph, vector<string>& Errors);
+    static void DeduplicateEdges(TGraph& Graph);
+    static void AddReverseEdges(TGraph& Graph);
+    static void AddSelfLoops(TGraph& Graph);
+    
+    double GetLearningRate() const { return FLearningRate; }
+    void SetLearningRate(double Value) { FLearningRate = Value; }
+    int GetMaxIterations() const { return FMaxIterations; }
+    void SetMaxIterations(int Value) { FMaxIterations = Value; }
+    int GetFeatureSize() const { return FFeatureSize; }
+    int GetHiddenSize() const { return FHiddenSize; }
+    int GetOutputSize() const { return FOutputSize; }
+    ActivationType GetActivation() const { return FActivation; }
+    void SetActivation(ActivationType Value) { FActivation = Value; }
+    LossType GetLossFunction() const { return FLossType; }
+    void SetLossFunction(LossType Value) { FLossType = Value; }
+    TTrainingMetrics GetMetrics() const { return FMetrics; }
 };
 
 // ==================== TGraphNeuralNetwork Implementation ====================
 
 TGraphNeuralNetwork::TGraphNeuralNetwork(int AFeatureSize, int AHiddenSize, int AOutputSize, int NumMPLayers) {
-   FLearningRate = 0.01;
-   FMaxIterations = 100;
-   FFeatureSize = AFeatureSize;
-   FHiddenSize = AHiddenSize;
-   FOutputSize = AOutputSize;
-   FNumMessagePassingLayers = NumMPLayers;
-   FActivation = atReLU;
-   FLossType = ltMSE;
-   FGPUInitialized = false;
-   
-   FMessageLayers.resize(NumMPLayers);
-   FUpdateLayers.resize(NumMPLayers);
-   
-   for (int I = 0; I < NumMPLayers; I++) {
-      if (I == 0)
-         InitializeLayer(FMessageLayers[I], AHiddenSize, AFeatureSize * 2);
-      else
-         InitializeLayer(FMessageLayers[I], AHiddenSize, AHiddenSize * 2);
-      
-      InitializeLayer(FUpdateLayers[I], AHiddenSize, AHiddenSize * 2);
-   }
-   
-   InitializeLayer(FReadoutLayer, AHiddenSize, AHiddenSize);
-   InitializeLayer(FOutputLayer, AOutputSize, AHiddenSize);
-   
-   FMetrics.LossHistory.clear();
-   
-   InitializeGPU();
+    FLearningRate = 0.01;
+    FMaxIterations = 100;
+    FFeatureSize = AFeatureSize;
+    FHiddenSize = AHiddenSize;
+    FOutputSize = AOutputSize;
+    FNumMessagePassingLayers = NumMPLayers;
+    FActivation = atReLU;
+    FLossType = ltMSE;
+    FGPUInitialized = false;
+    
+    FMessageLayers.resize(NumMPLayers);
+    FUpdateLayers.resize(NumMPLayers);
+    
+    for (int I = 0; I < NumMPLayers; I++) {
+       if (I == 0)
+          InitializeLayer(FMessageLayers[I], AHiddenSize, AFeatureSize * 2);
+       else
+          InitializeLayer(FMessageLayers[I], AHiddenSize, AHiddenSize * 2);
+       
+       InitializeLayer(FUpdateLayers[I], AHiddenSize, AHiddenSize * 2);
+    }
+    
+    InitializeLayer(FReadoutLayer, AHiddenSize, AHiddenSize);
+    InitializeLayer(FOutputLayer, AOutputSize, AHiddenSize);
+    
+    FMetrics.LossHistory.clear();
+    
+    InitializeGPU();
 }
 
 TGraphNeuralNetwork::~TGraphNeuralNetwork() {
-   FreeGPU();
+    FreeGPU();
 }
 
 void TGraphNeuralNetwork::InitializeLayer(TLayer& Layer, int NumNeurons, int NumInputs) {
-   Layer.NumInputs = NumInputs;
-   Layer.NumOutputs = NumNeurons;
-   Layer.Neurons.resize(NumNeurons);
-   
-   double Scale = sqrt(2.0 / (NumInputs + NumNeurons));
-   
-   for (int I = 0; I < NumNeurons; I++) {
-      Layer.Neurons[I].Weights.resize(NumInputs);
-      for (int J = 0; J < NumInputs; J++)
-         Layer.Neurons[I].Weights[J] = ((double)rand() / RAND_MAX - 0.5) * 2.0 * Scale;
-      Layer.Neurons[I].Bias = 0.0;
-      Layer.Neurons[I].Output = 0.0;
-      Layer.Neurons[I].PreActivation = 0.0;
-      Layer.Neurons[I].Error = 0.0;
-   }
+    Layer.NumInputs = NumInputs;
+    Layer.NumOutputs = NumNeurons;
+    Layer.Neurons.resize(NumNeurons);
+    
+    double Scale = sqrt(2.0 / (NumInputs + NumNeurons));
+    
+    for (int I = 0; I < NumNeurons; I++) {
+       Layer.Neurons[I].Weights.resize(NumInputs);
+       for (int J = 0; J < NumInputs; J++)
+          Layer.Neurons[I].Weights[J] = ((double)rand() / RAND_MAX - 0.5) * 2.0 * Scale;
+       Layer.Neurons[I].Bias = 0.0;
+       Layer.Neurons[I].Output = 0.0;
+       Layer.Neurons[I].PreActivation = 0.0;
+       Layer.Neurons[I].Error = 0.0;
+    }
 }
 
 void TGraphNeuralNetwork::InitializeGPULayer(TGPULayer& GPULayer, const TLayer& Layer) {
-   GPULayer.NumInputs = Layer.NumInputs;
-   GPULayer.NumOutputs = Layer.NumOutputs;
-   
-   int WeightSize = Layer.NumOutputs * Layer.NumInputs;
-   
-   CUDA_CHECK(cudaMalloc(&GPULayer.d_Weights, WeightSize * sizeof(double)));
-   CUDA_CHECK(cudaMalloc(&GPULayer.d_Biases, Layer.NumOutputs * sizeof(double)));
-   CUDA_CHECK(cudaMalloc(&GPULayer.d_Output, Layer.NumOutputs * sizeof(double)));
-   CUDA_CHECK(cudaMalloc(&GPULayer.d_PreActivations, Layer.NumOutputs * sizeof(double)));
-   CUDA_CHECK(cudaMalloc(&GPULayer.d_Errors, Layer.NumOutputs * sizeof(double)));
-   CUDA_CHECK(cudaMalloc(&GPULayer.d_LastInput, Layer.NumInputs * sizeof(double)));
-   
-   SyncLayerToGPU(GPULayer, Layer);
+    GPULayer.NumInputs = Layer.NumInputs;
+    GPULayer.NumOutputs = Layer.NumOutputs;
+    
+    int WeightSize = Layer.NumOutputs * Layer.NumInputs;
+    
+    CUDA_CHECK(cudaMalloc(&GPULayer.d_Weights, WeightSize * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&GPULayer.d_Biases, Layer.NumOutputs * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&GPULayer.d_Output, Layer.NumOutputs * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&GPULayer.d_PreActivations, Layer.NumOutputs * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&GPULayer.d_Errors, Layer.NumOutputs * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&GPULayer.d_LastInput, Layer.NumInputs * sizeof(double)));
+    
+    SyncLayerToGPU(GPULayer, Layer);
 }
 
 void TGraphNeuralNetwork::FreeGPULayer(TGPULayer& GPULayer) {
-   if (GPULayer.d_Weights) cudaFree(GPULayer.d_Weights);
-   if (GPULayer.d_Biases) cudaFree(GPULayer.d_Biases);
-   if (GPULayer.d_Output) cudaFree(GPULayer.d_Output);
-   if (GPULayer.d_PreActivations) cudaFree(GPULayer.d_PreActivations);
-   if (GPULayer.d_Errors) cudaFree(GPULayer.d_Errors);
-   if (GPULayer.d_LastInput) cudaFree(GPULayer.d_LastInput);
-   GPULayer.d_Weights = nullptr;
-   GPULayer.d_Biases = nullptr;
-   GPULayer.d_Output = nullptr;
-   GPULayer.d_PreActivations = nullptr;
-   GPULayer.d_Errors = nullptr;
-   GPULayer.d_LastInput = nullptr;
+    if (GPULayer.d_Weights) cudaFree(GPULayer.d_Weights);
+    if (GPULayer.d_Biases) cudaFree(GPULayer.d_Biases);
+    if (GPULayer.d_Output) cudaFree(GPULayer.d_Output);
+    if (GPULayer.d_PreActivations) cudaFree(GPULayer.d_PreActivations);
+    if (GPULayer.d_Errors) cudaFree(GPULayer.d_Errors);
+    if (GPULayer.d_LastInput) cudaFree(GPULayer.d_LastInput);
+    GPULayer.d_Weights = nullptr;
+    GPULayer.d_Biases = nullptr;
+    GPULayer.d_Output = nullptr;
+    GPULayer.d_PreActivations = nullptr;
+    GPULayer.d_Errors = nullptr;
+    GPULayer.d_LastInput = nullptr;
 }
 
 void TGraphNeuralNetwork::SyncLayerToGPU(TGPULayer& GPULayer, const TLayer& Layer) {
-   vector<double> Weights(Layer.NumOutputs * Layer.NumInputs);
-   vector<double> Biases(Layer.NumOutputs);
-   
-   for (int I = 0; I < Layer.NumOutputs; I++) {
-      for (int J = 0; J < Layer.NumInputs; J++)
-         Weights[I * Layer.NumInputs + J] = Layer.Neurons[I].Weights[J];
-      Biases[I] = Layer.Neurons[I].Bias;
-   }
-   
-   CUDA_CHECK(cudaMemcpy(GPULayer.d_Weights, Weights.data(), Weights.size() * sizeof(double), cudaMemcpyHostToDevice));
-   CUDA_CHECK(cudaMemcpy(GPULayer.d_Biases, Biases.data(), Biases.size() * sizeof(double), cudaMemcpyHostToDevice));
+    vector<double> Weights(Layer.NumOutputs * Layer.NumInputs);
+    vector<double> Biases(Layer.NumOutputs);
+    
+    for (int I = 0; I < Layer.NumOutputs; I++) {
+       for (int J = 0; J < Layer.NumInputs; J++)
+          Weights[I * Layer.NumInputs + J] = Layer.Neurons[I].Weights[J];
+       Biases[I] = Layer.Neurons[I].Bias;
+    }
+    
+    CUDA_CHECK(cudaMemcpy(GPULayer.d_Weights, Weights.data(), Weights.size() * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(GPULayer.d_Biases, Biases.data(), Biases.size() * sizeof(double), cudaMemcpyHostToDevice));
 }
 
 void TGraphNeuralNetwork::SyncLayerFromGPU(TLayer& Layer, const TGPULayer& GPULayer) {
-   vector<double> Weights(Layer.NumOutputs * Layer.NumInputs);
-   vector<double> Biases(Layer.NumOutputs);
-   
-   CUDA_CHECK(cudaMemcpy(Weights.data(), GPULayer.d_Weights, Weights.size() * sizeof(double), cudaMemcpyDeviceToHost));
-   CUDA_CHECK(cudaMemcpy(Biases.data(), GPULayer.d_Biases, Biases.size() * sizeof(double), cudaMemcpyDeviceToHost));
-   
-   for (int I = 0; I < Layer.NumOutputs; I++) {
-      for (int J = 0; J < Layer.NumInputs; J++)
-         Layer.Neurons[I].Weights[J] = Weights[I * Layer.NumInputs + J];
-      Layer.Neurons[I].Bias = Biases[I];
-   }
+    vector<double> Weights(Layer.NumOutputs * Layer.NumInputs);
+    vector<double> Biases(Layer.NumOutputs);
+    
+    CUDA_CHECK(cudaMemcpy(Weights.data(), GPULayer.d_Weights, Weights.size() * sizeof(double), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(Biases.data(), GPULayer.d_Biases, Biases.size() * sizeof(double), cudaMemcpyDeviceToHost));
+    
+    for (int I = 0; I < Layer.NumOutputs; I++) {
+       for (int J = 0; J < Layer.NumInputs; J++)
+          Layer.Neurons[I].Weights[J] = Weights[I * Layer.NumInputs + J];
+       Layer.Neurons[I].Bias = Biases[I];
+    }
 }
 
 void TGraphNeuralNetwork::InitializeGPU() {
-   if (FGPUInitialized) return;
-   
-   FGPUMessageLayers.resize(FNumMessagePassingLayers);
-   FGPUUpdateLayers.resize(FNumMessagePassingLayers);
-   
-   for (int I = 0; I < FNumMessagePassingLayers; I++) {
-      InitializeGPULayer(FGPUMessageLayers[I], FMessageLayers[I]);
-      InitializeGPULayer(FGPUUpdateLayers[I], FUpdateLayers[I]);
-   }
-   
-   InitializeGPULayer(FGPUReadoutLayer, FReadoutLayer);
-   InitializeGPULayer(FGPUOutputLayer, FOutputLayer);
-   
-   FGPUInitialized = true;
+    if (FGPUInitialized) return;
+    
+    FGPUMessageLayers.resize(FNumMessagePassingLayers);
+    FGPUUpdateLayers.resize(FNumMessagePassingLayers);
+    
+    for (int I = 0; I < FNumMessagePassingLayers; I++) {
+       InitializeGPULayer(FGPUMessageLayers[I], FMessageLayers[I]);
+       InitializeGPULayer(FGPUUpdateLayers[I], FUpdateLayers[I]);
+    }
+    
+    InitializeGPULayer(FGPUReadoutLayer, FReadoutLayer);
+    InitializeGPULayer(FGPUOutputLayer, FOutputLayer);
+    
+    FGPUInitialized = true;
 }
 
 void TGraphNeuralNetwork::FreeGPU() {
-   if (!FGPUInitialized) return;
-   
-   for (int I = 0; I < FNumMessagePassingLayers; I++) {
-      FreeGPULayer(FGPUMessageLayers[I]);
-      FreeGPULayer(FGPUUpdateLayers[I]);
-   }
-   
-   FreeGPULayer(FGPUReadoutLayer);
-   FreeGPULayer(FGPUOutputLayer);
-   
-   FGPUInitialized = false;
+    if (!FGPUInitialized) return;
+    
+    for (int I = 0; I < FNumMessagePassingLayers; I++) {
+       FreeGPULayer(FGPUMessageLayers[I]);
+       FreeGPULayer(FGPUUpdateLayers[I]);
+    }
+    
+    FreeGPULayer(FGPUReadoutLayer);
+    FreeGPULayer(FGPUOutputLayer);
+    
+    FGPUInitialized = false;
 }
 
 void TGraphNeuralNetwork::SyncToGPU() {
-   for (int I = 0; I < FNumMessagePassingLayers; I++) {
-      SyncLayerToGPU(FGPUMessageLayers[I], FMessageLayers[I]);
-      SyncLayerToGPU(FGPUUpdateLayers[I], FUpdateLayers[I]);
-   }
-   SyncLayerToGPU(FGPUReadoutLayer, FReadoutLayer);
-   SyncLayerToGPU(FGPUOutputLayer, FOutputLayer);
+    for (int I = 0; I < FNumMessagePassingLayers; I++) {
+       SyncLayerToGPU(FGPUMessageLayers[I], FMessageLayers[I]);
+       SyncLayerToGPU(FGPUUpdateLayers[I], FUpdateLayers[I]);
+    }
+    SyncLayerToGPU(FGPUReadoutLayer, FReadoutLayer);
+    SyncLayerToGPU(FGPUOutputLayer, FOutputLayer);
 }
 
 void TGraphNeuralNetwork::SyncFromGPU() {
-   for (int I = 0; I < FNumMessagePassingLayers; I++) {
-      SyncLayerFromGPU(FMessageLayers[I], FGPUMessageLayers[I]);
-      SyncLayerFromGPU(FUpdateLayers[I], FGPUUpdateLayers[I]);
-   }
-   SyncLayerFromGPU(FReadoutLayer, FGPUReadoutLayer);
-   SyncLayerFromGPU(FOutputLayer, FGPUOutputLayer);
+    for (int I = 0; I < FNumMessagePassingLayers; I++) {
+       SyncLayerFromGPU(FMessageLayers[I], FGPUMessageLayers[I]);
+       SyncLayerFromGPU(FUpdateLayers[I], FGPUUpdateLayers[I]);
+    }
+    SyncLayerFromGPU(FReadoutLayer, FGPUReadoutLayer);
+    SyncLayerFromGPU(FOutputLayer, FGPUOutputLayer);
 }
 
 double TGraphNeuralNetwork::Activate(double X) {
@@ -1063,8 +1097,8 @@ void TGraphNeuralNetwork::LoadModel(const string& Filename) {
    int ActInt, LossInt;
    F.read((char*)&ActInt, sizeof(int));
    F.read((char*)&LossInt, sizeof(int));
-   FActivation = (TActivationType)ActInt;
-   FLossType = (TLossType)LossInt;
+   FActivation = (ActivationType)ActInt;
+   FLossType = (LossType)LossInt;
    
    FMessageLayers.resize(FNumMessagePassingLayers);
    FUpdateLayers.resize(FNumMessagePassingLayers);
@@ -1159,30 +1193,41 @@ void PrintUsage() {
    cout << "  gnn_cuda --nodes data.csv --edges edges.csv --target-file targets.txt -o trained.bin" << endl;
 }
 
-TActivationType ParseActivation(const string& S) {
-   string Lower = S;
-   transform(Lower.begin(), Lower.end(), Lower.begin(), ::tolower);
-   
-   if (Lower == "relu") return atReLU;
-   else if (Lower == "leakyrelu") return atLeakyReLU;
-   else if (Lower == "tanh") return atTanh;
-   else if (Lower == "sigmoid") return atSigmoid;
-   else {
-      cout << "Unknown activation: " << S << ". Using LeakyReLU." << endl;
-      return atLeakyReLU;
-   }
+string ActivationToStr(ActivationType act) {
+    switch (act) {
+        case atReLU: return "relu";
+        case atLeakyReLU: return "leakyrelu";
+        case atTanh: return "tanh";
+        case atSigmoid: return "sigmoid";
+        default: return "relu";
+    }
 }
 
-TLossType ParseLoss(const string& S) {
-   string Lower = S;
-   transform(Lower.begin(), Lower.end(), Lower.begin(), ::tolower);
-   
-   if (Lower == "mse") return ltMSE;
-   else if (Lower == "bce") return ltBinaryCrossEntropy;
-   else {
-      cout << "Unknown loss: " << S << ". Using MSE." << endl;
-      return ltMSE;
-   }
+string LossToStr(LossType loss) {
+    switch (loss) {
+        case ltMSE: return "mse";
+        case ltBinaryCrossEntropy: return "bce";
+        default: return "mse";
+    }
+}
+
+ActivationType ParseActivation(const string& s) {
+    string lower = s;
+    transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    
+    if (lower == "relu") return atReLU;
+    else if (lower == "leakyrelu") return atLeakyReLU;
+    else if (lower == "tanh") return atTanh;
+    else if (lower == "sigmoid") return atSigmoid;
+    else return atReLU;
+}
+
+LossType ParseLoss(const string& s) {
+    string lower = s;
+    transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    
+    if (lower == "bce") return ltBinaryCrossEntropy;
+    else return ltMSE;
 }
 
 bool FileExists(const string& Filename) {
@@ -1330,8 +1375,8 @@ int main(int argc, char* argv[]) {
    int ArgHiddenSize = 16;
    int ArgOutputSize = 2;
    int ArgMPLayers = 2;
-   TActivationType ArgActivation = atLeakyReLU;
-   TLossType ArgLoss = ltMSE;
+   ActivationType ArgActivation = atLeakyReLU;
+   LossType ArgLoss = ltMSE;
    string ArgModelFile = "gnn_model.bin";
    string ArgLoadFile = "";
    string ArgNodesFile = "";
