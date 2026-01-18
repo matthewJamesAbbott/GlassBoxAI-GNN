@@ -1,4 +1,5 @@
-# GlassBoxAI-GNN
+# GlassBoxAI-GNN  <img width="1459" height="821" alt="cisa-logo-01" src="https://github.com/user-attachments/assets/a36bfc70-6b57-48f4-89e4-cd8aa44348af" />
+
 
 ## **Graph Neural Network Suite**
 
