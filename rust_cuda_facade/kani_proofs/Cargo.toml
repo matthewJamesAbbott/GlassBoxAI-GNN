@@ -1,0 +1,14 @@
+[package]
+name = "gnn_cli_kani_proofs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matthew Abbott"]
+license = "MIT"
+description = "Kani Formal Verification Proofs for GNN Facade CLI - CISA Secure by Design Compliance"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[dependencies]
+
+[dev-dependencies]

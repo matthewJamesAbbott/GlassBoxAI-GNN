@@ -1,0 +1,22 @@
+
+[package]
+name = "gnn_facade_gui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matthew Abbott"]
+license = "MIT"
+description = "Graph Neural Network Facade GUI with CXX-Qt"
+
+[dependencies]
+cxx = "1.0"
+cxx-qt = "0.7"
+cxx-qt-lib = { version = "0.7", features = ["qt_gui", "qt_qml", "qt_quickcontrols"] }
+cudarc = { version = "0.12", features = ["driver", "nvrtc", "cuda-12000"] }
+rand = "0.8"
+
+[build-dependencies]
+cxx-qt-build = "0.7"
+
+[[bin]]
+name = "gnn_facade_gui"
+path = "src/main.rs"
