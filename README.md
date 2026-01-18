@@ -127,6 +127,12 @@ GlassBoxAI-GNN/
 │   ├── src/
 │   │   └── main.rs
 │   ├── gui/                    # Qt-based GUI (optional)
+|       └── kani_proofs         # Formal verification proofs
+│       |   ├── Cargo.toml
+│       |   ├── src/
+│       |   │   └── lib.rs
+│       ├── README.md
+│       └── VERIFICATION_REPORT.md
 │   │   └── src/
 │   │       └── main.rs
 │   └── kani_proofs/            # Formal verification proofs
