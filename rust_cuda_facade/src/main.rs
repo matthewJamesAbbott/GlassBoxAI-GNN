@@ -1340,7 +1340,6 @@ enum Commands {
         #[arg(long)]
         model: String,
     },
-    Help,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1491,23 +1490,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Feature size: {}", facade.get_feature_size());
             println!("Hidden size: {}", facade.get_hidden_size());
             println!("Output size: {}", facade.get_output_size());
-        }
-        Commands::Help => {
-            println!("\nGNN-Facade-CUDA-Rust - Graph Neural Network with Facade Pattern");
-            println!("================================================================\n");
-            println!("USAGE:");
-            println!("  gnn_facade_cuda <command> [options]\n");
-            println!("COMMANDS:");
-            println!("  create        Create a new GNN model");
-            println!("  predict       Make predictions on a graph");
-            println!("  train         Train the model with graph data");
-            println!("  degree        Get node degree");
-            println!("  neighbors     Get node neighbors");
-            println!("  pagerank      Compute PageRank scores");
-            println!("  save          Save model to file");
-            println!("  load          Load model from file");
-            println!("  info          Display model information");
-            println!("  help          Show this help message");
         }
     }
 
