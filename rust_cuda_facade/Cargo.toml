@@ -1,0 +1,16 @@
+[package]
+name = "gnn_facade_cuda"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matthew Abbott"]
+license = "MIT"
+description = "Graph Neural Network with Facade Pattern and CUDA acceleration"
+
+[dependencies]
+cudarc = { version = "0.12", features = ["driver", "nvrtc", "cuda-12000"] }
+rand = "0.8"
+clap = { version = "4.4", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
