@@ -400,6 +400,7 @@ impl GpuLayer {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     fn sync_from_host(&mut self, device: &Arc<CudaDevice>, layer: &Layer) -> Result<(), Box<dyn std::error::Error>> {
         let weight_size = layer.num_outputs * layer.num_inputs;
         let mut weights = vec![0.0f64; weight_size];
@@ -1118,7 +1119,84 @@ impl GraphNeuralNetwork {
 
 #[derive(Parser)]
 #[command(name = "gnn_cuda")]
-#[command(about = "Graph Neural Network with CUDA acceleration (Rust port)", long_about = None)]
+#[command(about = "GNN-CUDA - Graph Neural Network (GPU-Accelerated, Rust port)")]
+#[command(after_help = r#"NETWORK FUNCTIONS:
+  create               Create a new GNN model
+    --feature=N          Input feature dimension (required)
+    --hidden=N           Hidden layer dimension (required)
+    --output=N           Output dimension (required)
+    --mp-layers=N        Message passing layers (required)
+    --save=FILE          Save initial model to file (required)
+    --lr=VALUE           Learning rate (default: 0.01)
+    --activation=TYPE    relu|leakyrelu|tanh|sigmoid (default: relu)
+    --loss=TYPE          mse|bce (default: mse)
+
+  predict              Make predictions on a graph
+    --model=FILE         Model file (required)
+    --graph=FILE         Graph file in JSON format (required)
+
+  train                Train the model with graph data
+    --model=FILE         Model file (required)
+    --graph=FILE         Graph file in JSON format (required)
+    --save=FILE          Save trained model to file
+    --epochs=N           Training epochs (default: 100)
+    --lr=VALUE           Override learning rate
+
+GRAPH FUNCTIONS:
+  add-node             Add a node to the graph
+    --model=FILE         Model file (required)
+    --save=FILE          Output file (required)
+
+  add-edge             Add an edge to the graph
+    --model=FILE         Model file (required)
+    --edge=SRC,TGT       Edge as source,target (required)
+    --save=FILE          Output file (required)
+
+  remove-edge          Remove an edge from the graph
+    --model=FILE         Model file (required)
+    --edge=SRC,TGT       Edge to remove (required)
+    --save=FILE          Output file (required)
+
+  degree               Get node degree (in + out)
+    --model=FILE         Model file (required)
+    --node=N             Node index (required)
+
+  in-degree            Get node in-degree
+    --model=FILE         Model file (required)
+    --node=N             Node index (required)
+
+  out-degree           Get node out-degree
+    --model=FILE         Model file (required)
+    --node=N             Node index (required)
+
+  neighbors            Get node neighbors
+    --model=FILE         Model file (required)
+    --node=N             Node index (required)
+
+  pagerank             Compute PageRank scores
+    --model=FILE         Model file (required)
+    --damping=D          Damping factor (default: 0.85)
+    --iterations=N       Iterations (default: 20)
+
+  gradient-flow        Show gradient flow analysis
+    --model=FILE         Model file (required)
+
+EXAMPLES:
+  # Create a new model
+  gnn_cuda create --feature=3 --hidden=16 --output=2 --mp-layers=2 --save=model.bin
+
+  # Get node degree
+  gnn_cuda degree --model=model.bin --node=0
+
+  # Compute PageRank
+  gnn_cuda pagerank --model=model.bin --damping=0.85 --iterations=20
+
+  # Train the model
+  gnn_cuda train --model=model.bin --graph=graph.json --save=trained.bin --epochs=100
+
+  # Make predictions
+  gnn_cuda predict --model=trained.bin --graph=graph.json
+"#)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -1126,6 +1204,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Create a new GNN model
     Create {
         #[arg(long)]
         feature: usize,
@@ -1144,6 +1223,7 @@ enum Commands {
         #[arg(long, value_enum, default_value = "mse")]
         loss: LossType,
     },
+    /// Train the model with graph data
     Train {
         #[arg(long)]
         model: String,
@@ -1156,38 +1236,59 @@ enum Commands {
         #[arg(long)]
         lr: Option<f64>,
     },
+    /// Make predictions on a graph
     Predict {
         #[arg(long)]
         model: String,
         #[arg(long)]
         graph: String,
     },
+    /// Display model information
     Info {
         #[arg(long)]
         model: String,
     },
+    /// Save model to file
     Save {
         #[arg(long)]
         model: String,
         #[arg(long)]
         output: String,
     },
+    /// Load model from file
     Load {
         #[arg(long)]
         model: String,
     },
+    /// Get node degree (in + out)
     Degree {
         #[arg(long)]
         model: String,
         #[arg(long)]
         node: usize,
     },
+    /// Get node in-degree
+    InDegree {
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        node: usize,
+    },
+    /// Get node out-degree
+    OutDegree {
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        node: usize,
+    },
+    /// Get node neighbors
     Neighbors {
         #[arg(long)]
         model: String,
         #[arg(long)]
         node: usize,
     },
+    /// Compute PageRank scores
     Pagerank {
         #[arg(long)]
         model: String,
@@ -1196,12 +1297,14 @@ enum Commands {
         #[arg(long, default_value = "20")]
         iterations: usize,
     },
+    /// Add a node to the graph
     AddNode {
         #[arg(long)]
         model: String,
         #[arg(long)]
         save: String,
     },
+    /// Add an edge to the graph
     AddEdge {
         #[arg(long)]
         model: String,
@@ -1210,6 +1313,7 @@ enum Commands {
         #[arg(long)]
         save: String,
     },
+    /// Remove an edge from the graph
     RemoveEdge {
         #[arg(long)]
         model: String,
@@ -1218,11 +1322,11 @@ enum Commands {
         #[arg(long)]
         save: String,
     },
+    /// Show gradient flow analysis
     GradientFlow {
         #[arg(long)]
         model: String,
     },
-    Help,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1526,26 +1630,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Loss Function: {}", gnn.get_loss_function());
             println!("Gradient Clipping: {:.1}", GRADIENT_CLIP);
         }
-        Commands::Help => {
-            println!("\nGNN-CUDA-Rust - Graph Neural Network (GPU-Accelerated)");
-            println!("======================================================\n");
-            println!("USAGE:");
-            println!("  gnn_cuda <command> [options]\n");
-            println!("COMMANDS:");
-            println!("  create        Create a new GNN model");
-            println!("  predict       Make predictions on a graph");
-            println!("  train         Train the model with graph data");
-            println!("  save          Save model to file");
-            println!("  load          Load model from file");
-            println!("  info          Display model information");
-            println!("  degree        Get node degree (in-degree/out-degree)");
-            println!("  neighbors     Get node neighbors");
-            println!("  pagerank      Compute PageRank scores");
-            println!("  add-node      Add a node to the graph");
-            println!("  add-edge      Add an edge to the graph");
-            println!("  remove-edge   Remove an edge from the graph");
-            println!("  gradient-flow Show gradient flow analysis");
-            println!("  help          Show this help message");
+        Commands::InDegree { model, node } => {
+            let mut gnn = GraphNeuralNetwork::new(1, 1, 1, 1)?;
+            gnn.load_model(&model)?;
+
+            let graph = Graph::new(5);
+            let in_degree = graph.edges.iter().filter(|e| e.target == node).count();
+            println!("{}", in_degree);
+        }
+        Commands::OutDegree { model, node } => {
+            let mut gnn = GraphNeuralNetwork::new(1, 1, 1, 1)?;
+            gnn.load_model(&model)?;
+
+            let graph = Graph::new(5);
+            let out_degree = graph.edges.iter().filter(|e| e.source == node).count();
+            println!("{}", out_degree);
         }
     }
 

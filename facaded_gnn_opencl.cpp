@@ -355,8 +355,8 @@ public:
 };
 
 GraphNeuralNetwork::GraphNeuralNetwork(int featureSize, int hiddenSize, int outputSize, int numMPLayers, bool useGPU)
-    : FFeatureSize(featureSize), FHiddenSize(hiddenSize), FOutputSize(outputSize),
-      FNumMessagePassingLayers(numMPLayers), FUseGPU(useGPU) {
+    : FNumMessagePassingLayers(numMPLayers), FFeatureSize(featureSize), FHiddenSize(hiddenSize), 
+      FOutputSize(outputSize), FUseGPU(useGPU) {
     
     FMessageLayers.resize(numMPLayers);
     FUpdateLayers.resize(numMPLayers);
@@ -625,7 +625,7 @@ void GraphNeuralNetwork::BackPropagateGraph(Graph& graph, const DoubleArray& tar
             }
             
             if (!graph.AdjacencyList[node].empty()) {
-                for (int neighbor : graph.AdjacencyList[node]) {
+                for ([[maybe_unused]] int neighbor : graph.AdjacencyList[node]) {
                     DoubleArray messageInputGrad = aggregatedGrad;
                     int neighborCount = graph.AdjacencyList[node].size();
                     for (auto& g : messageInputGrad) g /= (neighborCount > 0 ? neighborCount : 1.0);
@@ -1040,11 +1040,11 @@ const DoubleArray& GraphNeuralNetworkFacade::GetGraphEmbedding() const {
 // ==================== CLI Help System ====================
 
 void PrintHelp() {
-    std::cout << "\nGNN-Facade - Graph Neural Network with Facade Pattern (GPU-Accelerated)\n";
-    std::cout << "========================================================================\n\n";
+    std::cout << "\nGNN-Facade - Graph Neural Network with Facade Pattern (OpenCL-Accelerated)\n";
+    std::cout << "==========================================================================\n\n";
     
     std::cout << "USAGE:\n";
-    std::cout << "  facade-gnn <command> [options]\n\n";
+    std::cout << "  facade-gnn-opencl <command> [options]\n\n";
     
     std::cout << "COMMANDS:\n";
     std::cout << "  create        Create a new GNN model\n";
@@ -1097,53 +1097,111 @@ void PrintHelp() {
     std::cout << "  load\n";
     std::cout << "    --model=FILE         Model file to load (required)\n\n";
     
-    std::cout << "FACADE FUNCTIONS:\n";
+    std::cout << "FACADE FUNCTIONS - GRAPH STRUCTURE:\n";
+    std::cout << "  create-graph <nodes> <features>\n";
+    std::cout << "                         Create empty graph with N nodes and feature dim\n";
+    std::cout << "  load-graph <nodes.csv> <edges.csv>\n";
+    std::cout << "                         Load graph from CSV files\n";
+    std::cout << "  save-graph <nodes.csv> <edges.csv>\n";
+    std::cout << "                         Save graph to CSV files\n";
+    std::cout << "  export-json            Export graph as JSON\n\n";
+    
+    std::cout << "FACADE FUNCTIONS - NODE OPERATIONS:\n";
     std::cout << "  add-node\n";
     std::cout << "    --model=FILE         Model file (required)\n";
     std::cout << "    --index=N            Node index (required)\n";
-    std::cout << "    --features=F1,F2... Node features (comma-separated)\n\n";
+    std::cout << "    --features=F1,F2...  Node features (comma-separated)\n";
+    std::cout << "  get-node-feature <node_idx> <feature_idx>\n";
+    std::cout << "                         Get single node feature value\n";
+    std::cout << "  set-node-feature <node_idx> <feature_idx> <value>\n";
+    std::cout << "                         Set single node feature value\n";
+    std::cout << "  get-node-features <node_idx>\n";
+    std::cout << "                         Get all features for a node\n";
+    std::cout << "  set-node-features <node_idx> <v1,v2,...>\n";
+    std::cout << "                         Set all features for a node\n";
+    std::cout << "  get-neighbors <node_idx>\n";
+    std::cout << "                         Get neighbor node indices\n";
+    std::cout << "  get-in-degree <node_idx>\n";
+    std::cout << "                         Get node in-degree\n";
+    std::cout << "  get-out-degree <node_idx>\n";
+    std::cout << "                         Get node out-degree\n";
+    std::cout << "  get-num-nodes          Get total number of nodes\n\n";
     
-    std::cout << "  add-edge\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --source=N           Source node index (required)\n";
-    std::cout << "    --target=N           Target node index (required)\n\n";
+    std::cout << "FACADE FUNCTIONS - EDGE OPERATIONS:\n";
+    std::cout << "  add-edge <src> <tgt> [features]\n";
+    std::cout << "                         Add edge with optional features\n";
+    std::cout << "  remove-edge <edge_idx> Remove edge by index\n";
+    std::cout << "  get-edge-endpoints <edge_idx>\n";
+    std::cout << "                         Get source and target of edge\n";
+    std::cout << "  has-edge <source> <target>\n";
+    std::cout << "                         Check if edge exists\n";
+    std::cout << "  get-num-edges          Get total number of edges\n\n";
     
-    std::cout << "  remove-edge\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --edge=N             Edge index (required)\n\n";
+    std::cout << "FACADE FUNCTIONS - MASKING/DROPOUT:\n";
+    std::cout << "  set-node-mask <node_idx> <true|false>\n";
+    std::cout << "                         Set node mask (true=active)\n";
+    std::cout << "  set-edge-mask <edge_idx> <true|false>\n";
+    std::cout << "                         Set edge mask (true=active)\n";
+    std::cout << "  apply-node-dropout <rate>\n";
+    std::cout << "                         Apply random node dropout (0.0-1.0)\n";
+    std::cout << "  apply-edge-dropout <rate>\n";
+    std::cout << "                         Apply random edge dropout (0.0-1.0)\n\n";
     
-    std::cout << "  degree\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --node=N             Node index (required)\n\n";
+    std::cout << "FACADE FUNCTIONS - MODEL ANALYSIS:\n";
+    std::cout << "  get-node-embedding <layer_idx> <node_idx>\n";
+    std::cout << "                         Get node embedding at layer\n";
+    std::cout << "  get-activation-histogram <layer_idx> [num_bins]\n";
+    std::cout << "                         Get activation distribution\n";
+    std::cout << "  get-parameter-count    Get total trainable parameters\n";
+    std::cout << "  get-gradient-flow <layer_idx>\n";
+    std::cout << "                         Get gradient flow info for layer\n";
+    std::cout << "  compute-loss <pred1,pred2,...> <target1,target2,...>\n";
+    std::cout << "                         Compute loss between arrays\n";
+    std::cout << "  compute-pagerank [damping] [iterations]\n";
+    std::cout << "                         Compute PageRank (default: 0.85, 100)\n";
+    std::cout << "  export-embeddings <layer_idx> <output.csv>\n";
+    std::cout << "                         Export embeddings to CSV\n";
+    std::cout << "  get-architecture       Show model architecture summary\n";
+    std::cout << "  get-graph-embedding    Get graph-level embedding\n\n";
     
-    std::cout << "  in-degree / out-degree\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --node=N             Node index (required)\n\n";
+    std::cout << "FACADE FUNCTIONS - CONFIGURATION:\n";
+    std::cout << "  set-activation <relu|leaky_relu|tanh|sigmoid>\n";
+    std::cout << "                         Set activation function\n";
+    std::cout << "  set-loss <mse|bce>     Set loss function\n";
+    std::cout << "  set-learning-rate <val>\n";
+    std::cout << "                         Set learning rate\n";
+    std::cout << "  get-learning-rate      Get current learning rate\n\n";
     
-    std::cout << "  neighbors\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --node=N             Node index (required)\n\n";
+    std::cout << "FACADE FUNCTIONS - TRAINING:\n";
+    std::cout << "  predict                Run forward pass and get output\n";
+    std::cout << "  train <t1,t2,...>      Train one step with targets\n";
+    std::cout << "  train-multiple <iters> <t1,t2,...>\n";
+    std::cout << "                         Train multiple iterations\n\n";
     
-    std::cout << "  pagerank\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --damping=D          Damping factor (default: 0.85)\n";
-    std::cout << "    --iterations=N       Iterations (default: 20)\n\n";
-    
-    std::cout << "  gradient-flow\n";
-    std::cout << "    --model=FILE         Model file (required)\n";
-    std::cout << "    --layer=N            Layer index (optional)\n\n";
+    std::cout << "LEGACY COMMANDS:\n";
+    std::cout << "  create <feat> <hidden> <out> <layers>\n";
+    std::cout << "                         Create GNN with positional args\n";
+    std::cout << "  load-model <file>      Load model from file\n";
+    std::cout << "  save-model <file>      Save model to file\n\n";
     
     std::cout << "EXAMPLES:\n";
     std::cout << "  # Create a new model\n";
-    std::cout << "  facade-gnn create --feature=3 --hidden=16 --output=2 --mp-layers=2 --model=model.bin\n\n";
+    std::cout << "  facade-gnn-opencl create --feature=3 --hidden=16 --output=2 --mp-layers=2 --model=model.bin\n\n";
+    std::cout << "  # Create and manipulate a graph\n";
+    std::cout << "  facade-gnn-opencl create-graph 5 3\n";
+    std::cout << "  facade-gnn-opencl add-edge 0 1\n";
+    std::cout << "  facade-gnn-opencl set-node-features 0 1.0,2.0,3.0\n\n";
+    std::cout << "  # Apply dropout and predict\n";
+    std::cout << "  facade-gnn-opencl apply-node-dropout 0.2\n";
+    std::cout << "  facade-gnn-opencl predict\n\n";
     std::cout << "  # Get node degree\n";
-    std::cout << "  facade-gnn degree --model=model.bin --node=0\n\n";
+    std::cout << "  facade-gnn-opencl get-in-degree 0\n";
+    std::cout << "  facade-gnn-opencl get-out-degree 0\n\n";
     std::cout << "  # Compute PageRank\n";
-    std::cout << "  facade-gnn pagerank --model=model.bin --damping=0.85 --iterations=20\n\n";
+    std::cout << "  facade-gnn-opencl compute-pagerank 0.85 100\n\n";
     std::cout << "  # Train the model\n";
-    std::cout << "  facade-gnn train --model=model.bin --graph=graph.csv --target=target.csv --epochs=100 --save=trained.bin\n\n";
-    std::cout << "  # Make predictions\n";
-    std::cout << "  facade-gnn predict --model=trained.bin --graph=graph.csv\n\n";
+    std::cout << "  facade-gnn-opencl train 0.5,0.3\n";
+    std::cout << "  facade-gnn-opencl train-multiple 100 0.5,0.3\n\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -1184,8 +1242,9 @@ int main(int argc, char* argv[]) {
     
     try {
         // Parse command-line arguments
-        int featureSize = 0, hiddenSize = 0, outputSize = 0, mpLayers = 0;
-        int nodeIdx = -1, edgeIdx = -1, sourceNode = -1, targetNode = -1, layerIdx = -1;
+        [[maybe_unused]] int featureSize = 0, hiddenSize = 0, outputSize = 0, mpLayers = 0;
+        int nodeIdx = -1;
+        [[maybe_unused]] int edgeIdx = -1, sourceNode = -1, targetNode = -1, layerIdx = -1;
         double learningRate = 0.01, damping = 0.85;
         int epochs = 100, pageRankIters = 20;
         std::string modelFile, graphFile, targetFile, outputFile;
@@ -1227,8 +1286,8 @@ int main(int argc, char* argv[]) {
         if (cmd == cmdCreate) {
             // For CNN compatibility, we need input dimensions
             // Default to MNIST-like if not specified
-            int inputWidth = 28, inputHeight = 28, inputChannels = 1;
-            int convFilters = 16, kernelSize = 3, poolSize = 2;
+            [[maybe_unused]] int inputWidth = 28, inputHeight = 28, inputChannels = 1;
+            [[maybe_unused]] int convFilters = 16, kernelSize = 3, poolSize = 2;
             
             if (modelFile.empty()) {
                 std::cerr << "Error: --model is required\n";
@@ -1340,7 +1399,7 @@ int main(int argc, char* argv[]) {
             };
             
             double currentLR = std::stod(findKey("learning_rate"));
-            int outSize = std::stoi(findKey("output_size"));
+            [[maybe_unused]] int outSize = std::stoi(findKey("output_size"));
             
             std::cout << "Training model from: " << modelFile << "\n";
             std::cout << "  Epochs: " << epochs << "\n";

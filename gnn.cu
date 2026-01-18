@@ -35,9 +35,9 @@
 
 using namespace std;
 
-const int MAX_NODES = 1000;
-const int MAX_EDGES = 10000;
-const int MAX_ITERATIONS = 10000;
+[[maybe_unused]] const int MAX_NODES = 1000;
+[[maybe_unused]] const int MAX_EDGES = 10000;
+[[maybe_unused]] const int MAX_ITERATIONS = 10000;
 const double GRADIENT_CLIP = 5.0;
 const string MODEL_MAGIC = "GNNBKND01";
 const int BLOCK_SIZE = 256;
@@ -1508,7 +1508,7 @@ int main(int argc, char* argv[]) {
     double damping = 0.85;
     int epochs = 100;
     int pageRankIters = 20;
-    bool verbose = false;
+    [[maybe_unused]] bool verbose = false;
     ActivationType activation = atReLU;
     LossType loss = ltMSE;
     string modelFile = "";

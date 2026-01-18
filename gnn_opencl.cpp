@@ -564,7 +564,7 @@ public:
 };
 
 TGraphNeuralNetworkOpenCL::TGraphNeuralNetworkOpenCL(int AFeatureSize, int AHiddenSize, int AOutputSize, int NumMPLayers, const string& kernel_source)
-    : FFeatureSize(AFeatureSize), FHiddenSize(AHiddenSize), FOutputSize(AOutputSize), FNumMessagePassingLayers(NumMPLayers) {
+    : FNumMessagePassingLayers(NumMPLayers), FFeatureSize(AFeatureSize), FHiddenSize(AHiddenSize), FOutputSize(AOutputSize) {
     
     FLearningRate = 0.01;
     FMaxIterations = 100;
@@ -1409,7 +1409,7 @@ int main(int argc, char* argv[]) {
     double damping = 0.85;
     int epochs = 100;
     int pageRankIters = 20;
-    bool verbose = false;
+    [[maybe_unused]] bool verbose = false;
     ActivationType activation = atReLU;
     LossType loss = ltMSE;
     string modelFile = "";
